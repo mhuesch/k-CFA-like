@@ -323,12 +323,12 @@
    (D ...)])
 
 (define-metafunction k-cfa
-  merge : (D ...) -> (D ...)
-  [(merge (D_1 ... const_1 D_2 ... const_2 D_3 ...))
-   (merge (N D_1 ... D_2 ... D_3 ...))]
-  [(merge (const_1 ... N const_2 ...))
+  lub : (D ...) -> (D ...)
+  [(lub (D_1 ... const_1 D_2 ... const_2 D_3 ...))
+   (lub (N D_1 ... D_2 ... D_3 ...))]
+  [(lub (const_1 ... N const_2 ...))
    (N)]
-  [(merge (D ...))
+  [(lub (D ...))
    (D ...)])
 
 (define-metafunction k-cfa
@@ -348,7 +348,7 @@
                       v))
       (map (λ (x)
              (list (car x)
-                   (term (merge ,(set->list (cdr x))))))
+                   (term (lub ,(set->list (cdr x))))))
            (sort (hash->list h2)
                  addr<?
                  #:key car)))])
