@@ -1,6 +1,9 @@
 diGraph G {
-  top -> N -> number -> empty
-  top -> false -> empty
-  top -> proc_with_arity_set -> clo -> empty
-  top -> kont_set -> empty
+  0 -> N
+  1 -> N
+  2 -> N
+  "..." -> N
+  N -> empty
+  false -> empty
+  clo -> proc_with_arity_set -> empty
 }
