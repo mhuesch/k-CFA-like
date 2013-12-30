@@ -5,41 +5,52 @@
 (define k 1)
 
 (define-language k-cfa
-  [Σ (e ρ σ a t)]
+  [eOrPS ::=
+         e
+         PS]
+  [Σ ::=
+     (eOrPS ρ σ a t)
+     string]
   [ρ ((v a) ...)]
-  [σ ((a (D ...)) ...)]
+  [σ ((a Storable) ...)]
   [e ::=
+     prim
      val
      ref
-     (label : (e e))
+     (label : (begin e e e ...))
+     (label : (if e e e))
+     (label : (set! v e))
+     (label : (e e ...))
      (label : (prim e))]
   [val ::=
        atom
        lam]
   [atom ::=
-        num
-        ∅]
-  [num ::=
-       const
-       N]
+        (label : false)
+        (label : number)]
   [lam (label : ulam)]
-  [ulam (λ (v) e)]
-  [const (label : number)]
+  [ulam (λ (v ...) e)]
   [prim ::=
         (label : add1)]
   [clo ::=
        (lam ρ)]
-  [stoVal ::=
-           clo
-           atom]
-  [D ::=
-     stoVal
-     κ]
+  [Storable ::=
+            PS
+            (κ κ ...)]
+  [PS ::=
+      number
+      false
+      N
+      ∅
+      (proc-with-arity natural natural ...)
+      clo]
   [κ ::=
      (mt)
      (add1k a)
-     (ar e ρ a)
-     (fn lam ρ a)]
+     (callk (e ...) ρ (PS ...) a)
+     (setk a label c)
+     (ifk e e ρ a)
+     (begink e e ... a)]
   [ref (label : v)]
   [v variable-not-otherwise-mentioned]
   [label natural]
@@ -58,15 +69,35 @@
 
 (define (add-labels e lab inc)
   (match e
-    [`(,e0 ,e1)
+    [`(if ,e0 ,e1 ,e2)
      (define-values (le0 c0) (add-labels e0 (inc lab) inc))
      (define-values (le1 c1) (add-labels e1 c0 inc))
-     (values `(,lab : (,le0 ,le1))
+     (define-values (le2 c2) (add-labels e2 c1 inc))
+     (values `(,lab : (if ,le0 ,le1 ,le2))
+             c2)]
+    [`(begin ,e0 ,e1)
+     (define-values (le0 c0) (add-labels e0 (inc lab) inc))
+     (define-values (le1 c1) (add-labels e1 c0 inc))
+     (values `(,lab : (begin ,le0 ,le1))
              c1)]
-    [`(λ (,x) ,e0)
+    [`(set! ,x ,e)
+     (define-values (le c) (add-labels e (inc lab) inc))
+     (values `(,lab : (set! ,x ,le))
+             c)]
+    [`(λ (,xs ...) ,e0)
      (define-values (le0 count) (add-labels e0 (inc lab) inc))
-     (values `(,lab : (λ (,x)
+     (values `(,lab : (λ ,xs
                         ,le0))
+             count)]
+    [`(,es ...)
+     (match-define (cons les-rev count)
+       (foldl (λ (e acc)
+                (match-define (cons les count) acc)
+                (define-values (le c-new) (add-labels e count inc))
+                (cons (cons le les) c-new))
+              (cons '() (inc lab))
+              es))
+     (values `(,lab : ,(reverse les-rev))
              count)]
     [(? number? n)
      (values `(,lab : ,n)
@@ -84,6 +115,12 @@
     ε))
 
 
+(test-equal (labelFrom1 '((λ (x y) x)
+                          1
+                          2))
+            '(1 : ((2 : (λ (x y) (3 : x))) (4 : 1) (5 : 2))))
+
+
 ;
 ; Reduction relation
 ;
@@ -91,6 +128,19 @@
 (define k-cfa-red
   (reduction-relation
    k-cfa
+   #:domain Σ
+   ; val -> PS
+   (--> (name Σ
+              (val
+               ρ
+               σ
+               a
+               t))
+        ((make-PS val ρ)
+         ρ
+         σ
+         a
+         t))
    ; lookup
    (--> (name Σ
               ((label : v)
@@ -98,18 +148,15 @@
                σ
                a
                t))
-        (val
-         ρ_h
+        (PS
+         ρ
          σ
          a
          u)
         (where a_v (lookup_env v ρ))
-        (where (D ...) (lookup_sto a_v σ))
-        (judgment-holds (deref (D ...)
-                               (val ρ_h)))
-        (where (D_κ ...) (lookup_sto a σ))
-        (judgment-holds (deref (D_κ ...)
-                               κ))
+        (where PS (lookup_sto a_v σ))
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
         (where u (tick Σ κ))
         lookup)
    ; add1
@@ -125,97 +172,265 @@
          σ_new
          b
          u)
-        (where (D ...) (lookup_sto a σ))
-        (judgment-holds (deref (D ...)
-                               κ))
-        (where b (alloc Σ κ))
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
         (where u (tick Σ κ))
-        (where σ_new (join ((b ((add1k a)))) σ))
+        (where σ_new (join_sto ((b ((add1k a)))) σ))
         add1)
+   ; set!
+   (--> (name Σ
+              ((label : (set! v e))
+               ρ
+               σ
+               a
+               t))
+        (e
+         ρ
+         σ_new
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
+        (where u (tick Σ κ))
+        (where σ_new (join_sto ((b ((setk (lookup_env v ρ)
+                                          label
+                                          a))))
+                               σ))
+        set!)
    ; app
    (--> (name Σ
-              ((label : (e_0 e_1))
+              ((label : (e_0 e_s ...))
                ρ
                σ
                a
                t))
         (e_0
          ρ
-         σ_new
+         (join_sto ((b ((callk (e_s ...) ρ () a)))) σ)
          b
          u)
-        (where (D ...) (lookup_sto a σ))
-        (judgment-holds (deref (D ...)
-                               κ))
-        (where b (alloc Σ κ))
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
         (where u (tick Σ κ))
-        (where σ_new (join ((b ((ar e_1 ρ a)))) σ))
         app)
+   ; if
+   (--> (name Σ
+              ((label : (if e_0 e_1 e_2))
+               ρ
+               σ
+               a
+               t))
+        (e_0
+         ρ
+         (join_sto ((b ((ifk e_1 e_2 ρ a)))) σ)
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
+        (where u (tick Σ κ))
+        if)
+   ; begin
+   (--> (name Σ
+              ((label : (begin e_0 e_1 e_2 ...))
+               ρ
+               σ
+               a
+               t))
+        (e_0
+         ρ
+         (join_sto ((b ((begink e_1 e_2 ... a)))) σ)
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
+        (where u (tick Σ κ))
+        begin)
    ; konts
    ;
    ; add1
    (--> (name Σ
-              (atom
+              (PS
                ρ
                σ
                a
                t))
-        ((add1-atom atom)
+        ((add1-PS PS)
          ρ
          σ
          b
          u)
-        (where (D ...) (lookup_sto a σ))
-        (judgment-holds (deref (D ...)
-                               (name κ
-                                     (add1k b))))
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (add1k b))))
         (where u (tick Σ κ))
         add1-kont)
-   ; ar
+   ; set!
    (--> (name Σ
-              (lam
+              (PS
                ρ
                σ
                a
                t))
-        (e
-         ρ_ar
-         σ_new
-         b
-         u)
-        (where (D ...) (lookup_sto a σ))
-        (judgment-holds (deref (D ...)
-                               (name κ
-                                     (ar e ρ_ar a_c))))
-        (where b (alloc Σ κ))
-        (where u (tick Σ κ))
-        (where σ_new (join ((b ((fn lam ρ a_c)))) σ))
-        ar-kont)
-   ; fn
-   (--> (name Σ
-              (val
-               ρ
-               σ
-               a
-               t))
-        (e
-         ρ_fn_new
-         σ_new
+        ((lookup_sto b σ)
+         ρ
+         (join_sto ((b PS)) σ)
          c
          u)
-        (where (D ...) (lookup_sto a σ))
-        (judgment-holds (deref (D ...)
-                               (name κ
-                                     (fn (label : (λ (v) e))
-                                         ρ_fn
-                                         c))))
-        (where b (alloc Σ κ))
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (setk b label c))))
         (where u (tick Σ κ))
-        (where ρ_fn_new (insert_env v b ρ_fn))
-        (where D_bind (make-D val ρ))
-        (where σ_new (join ((b (D_bind))) σ))
-        fn-kont)))
-
+        setk)
+   ; call
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (e_1
+         ρ_k
+         (join_sto ((b ((callk (e_rest ...) ρ_k (PS_args ... PS) c)))) σ)
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk (e_1 e_rest ...) ρ_k (PS_args ...) c))))
+        (where (b) (alloc Σ κ))
+        (where u (tick Σ κ))
+        callk-more)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (e_body
+         (join_env ,(map list (term (v_s ...)) (term (a_formals ...)))
+                   ρ_clo)
+         (join_sto ,(map list (term (a_formals ...)) (term (PS_args ... PS)))
+                   σ)
+         c
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk ()
+                                              ρ_k
+                                              (((label : (λ (v_s ...) e_body))
+                                                ρ_clo)
+                                               PS_args ...)
+                                              c))))
+        (side-condition (eq? (length (term (v_s ...)))
+                             (length (term (PS_args ... PS)))))
+        (where (a_formals ...) (alloc Σ κ))
+        (where u (tick Σ κ))
+        callk-done-clo-arity-correct)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        "arity error"
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk ()
+                                              ρ_k
+                                              (((label : (λ (v_s ...) e_body))
+                                                ρ_clo)
+                                               PS_args ...)
+                                              c))))
+        (side-condition (not (eq? (length (term (v_s ...)))
+                                  (length (term (PS_args ... PS))))))
+        (where (a_formals ...) (alloc Σ κ))
+        (where u (tick Σ κ))
+        callk-done-clo-arity-incorrect)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (∅
+         ρ
+         σ
+         c
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk () ρ ((proc-with-arity natural ...) PS_args ...) c))))
+        (side-condition (member (add1 (length (term (PS_args ...))))
+                                (term (natural ...))))
+        (where u (tick Σ κ))
+        callk-proc-with-arity-correct)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        "arity error"
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk () ρ ((proc-with-arity natural ...) PS_args ...) c))))
+        (side-condition (not (member (add1 (length (term (PS_args ...))))
+                                     (term (natural ...)))))
+        (where u (tick Σ κ))
+        callk-proc-with-arity-incorrect)
+   ; if
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        ((if-chooser PS e_1 e_2)
+         ρ_if
+         σ
+         c
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (ifk e_1 e_2 ρ_if c))))
+        (where u (tick Σ κ)))
+   ; begin
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (e_1
+         ρ
+         σ
+         c
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (begink e_1 c))))
+        (where u (tick Σ κ))
+        begin-done)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (e_1
+         ρ
+         (join_sto ((a ((begink (e_2 ...) c)))))
+         a
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (begink (e_1 e_2 ...) c))))
+        (where u (tick Σ κ))
+        begin-more)))
 ;
 ; Metafunctions
 ;
@@ -224,57 +439,78 @@
   ; lookup
   [(tick (ref ρ σ a t) κ)
    t]
+  ; begin
+  [(tick ((label : (begin e_0 e_1 e_2 ...)) ρ σ a t) κ)
+   t]
   ; app
-  [(tick ((label : (e_0 e_1)) ρ σ a contour) κ)
+  [(tick ((label : (e_0 e_s ...)) ρ σ a contour) κ)
+   (k-left (label contour))]
+  ; if
+  [(tick ((label : (if e_0 e_1 e_2)) ρ σ a contour) κ)
+   (k-left (label contour))]
+  ; set!
+  [(tick (name Σ ((label : (set! v e)) ρ σ a contour)) κ)
    (k-left (label contour))]
   ; prim
   [(tick ((label : (prim e)) ρ σ a contour) κ)
    (k-left (label contour))]
-  ; ar
-  [(tick (val ρ σ (label × contour_ar) contour) (ar e ρ_0 a_0))
-   contour_ar]
-  ; fn
-  [(tick (val ρ σ a contour) (fn lam ρ_0 (label × contour_tail)))
-   contour_tail]
   ; add1k
-  [(tick (val ρ σ a contour) (add1k a_0))
-   contour])
+  [(tick (PS ρ σ a contour) (add1k a_0))
+   contour]
+  ; setk
+  [(tick (PS ρ σ a contour) (setk b label c))
+   contour]
+  ; ifk
+  [(tick (PS ρ σ (label × contour_ifk) contour) (ifk e_1 e_2 ρ_if c))
+   contour_ifk]
+  ; begink
+  [(tick (PS ρ σ (label × contour_begink) contour) (begink e_1 e_2 ... c))
+   contour_begink]
+  ; callk-more
+  [(tick (PS ρ σ (label × contour_callk) contour) (callk (e_k ...) ρ_k (PS_k ...) a))
+   contour_callk])
 
 
 (define-metafunction k-cfa
-  alloc : Σ κ -> a
+  alloc : Σ κ -> (a ...)
   ; app
-  [(alloc (name Σ ((label : (e_0 e_1)) ρ σ a contour))
+  [(alloc (name Σ ((label : (e_0 e_s ...)) ρ σ a contour))
           κ)
-   ((e-label e_0) × (tick Σ κ))]
+   (((e-label e_0) × (tick Σ κ)))]
+  ; if
+  [(alloc (name Σ ((label : (if e_0 e_1 e_2)) ρ σ a t))
+          κ)
+   (((e-label e_0) × (tick Σ κ)))]
+  ; begin
+  [(alloc (name Σ ((label : (begin e_0 e_1 e_2 ...)) ρ σ a t))
+          κ)
+   (((e-label e_0) × (tick Σ κ)))]
+  ; set!
+  [(alloc (name Σ ((label_1 : (set! v e)) ρ σ a contour))
+          κ)
+   (((e-label e) × (tick Σ κ)))]
   ; prim
   [(alloc (name Σ ((label : (prim e)) ρ σ a contour))
           κ)
-   ((e-label e) × contour)]
-  ; ar
-  [(alloc (name Σ (val ρ σ a contour))
-          (name κ (ar e ρ_0 a_0)))
-   ((e-label e) × (tick Σ κ))]
-  ; fn
-  [(alloc (name Σ (val ρ σ (label_a × contour_fn) contour))
-          (name κ (fn (label : (λ (v) e)) ρ_0 a_0)))
-   (v × contour_fn)])
+   (((e-label e) × contour))]
+  ; call-more
+  [(alloc (name Σ (PS ρ σ a contour))
+          (name κ (callk (e_1 e_rest ...) ρ_k (PS_args ...) c)))
+   (((e-label e_1) × (tick Σ κ)))]
+  ; call-done
+  [(alloc (name Σ (PS ρ σ a contour))
+          (name κ
+                (callk ()
+                       ρ_k
+                       (((label : (λ (v_s ...) e_body))
+                         ρ_clo)
+                        PS_args ...)
+                       c)))
+   ,(map (λ (formal)
+           `(,formal × ,(term contour)))
+         (term (v_s ...)))])
 
-(define-metafunction k-cfa
-  make-D : val ρ -> D
-  [(make-D atom ρ)
-   atom]
-  [(make-D lam ρ)
-   (lam ρ)])
 
-(define-metafunction k-cfa
-  add1-atom : atom -> atom
-  [(add1-atom (label : number))
-   (label : ,(add1 (term number)))]
-  [(add1-atom ∅)
-   ∅]
-  [(add1-atom N)
-   N])
 
 (define-metafunction k-cfa
   k-left : contour -> contour
@@ -292,18 +528,46 @@
    (label contour_tail)
    (where contour_tail (k-left-count ,(sub1 (term natural)) contour))])
 
+; Misc helpers
+;
+
+(define-metafunction k-cfa
+  make-PS : val ρ -> PS
+  [(make-PS atom ρ)
+   ,(match (term atom)
+      [`(,_ : ,x) x])]
+  [(make-PS lam ρ)
+   (lam ρ)])
+
+(define-metafunction k-cfa
+  val-env-pair : label PS ρ -> (val ρ)
+  [(val-env-pair label clo ρ)
+   clo]
+  [(val-env-pair label PS ρ)
+   ((label : PS) ρ)])
+
+(define-metafunction k-cfa
+  if-chooser : PS e e -> e
+  [(if-chooser false e_1 e_2)
+   e_2]
+  [(if-chooser PS e_1 e_2)
+   e_1])
+
+(define-metafunction k-cfa
+  add1-PS : PS -> PS
+  [(add1-PS number)
+   ,(add1 (term number))]
+  [(add1-PS ∅)
+   ∅]
+  [(add1-PS N)
+   N])
+
 (define-metafunction k-cfa
   e-label : e -> label
-  [(e-label (label : v))
-   label]
-  [(e-label (label : (λ (v) e)))
-   label]
-  [(e-label (label : number))
-   label]
-  [(e-label (label : (e_0 e_1)))
-   label]
-  [(e-label (label : (prim e)))
-   label])
+  [(e-label e)
+   ,(match (term e)
+      [`(,label : ,_)
+       label])])
 
 (define-metafunction k-cfa
   prim-label : prim -> label
@@ -319,85 +583,111 @@
    a])
 
 (define-metafunction k-cfa
-  insert_env : v a ρ -> ρ
-  [(insert_env v a ((v_1 a_1) ... (v a_old) (v_2 a_2) ...))
-   ((v_1 a_1) ... (v a) (v_2 a_2) ...)]
-  [(insert_env v a ((v_1 a_1) ...))
-   ((v a) (v_1 a_1) ...)])
+  lookup_sto : a σ -> Storable
+  [(lookup_sto a ((a_1 Storable_1) ... (a Storable) (a_2 Storable_2) ...))
+   Storable])
 
 (define-metafunction k-cfa
-  lookup_sto : a σ -> (D ...)
-  [(lookup_sto a ((a_1 (D_1 ...)) ... (a (D ...)) (a_2 (D_2 ...)) ...))
-   (D ...)])
+  clo-get-arity : clo -> natural
+  [(clo-get-arity ((label : (λ (v ...) e)) ρ))
+   ,(length (term (v ...)))])
 
-(define-metafunction k-cfa
-  glb : (D ...) -> (D ...)
-  ; Conflicting numbers
-  [(glb (D_1 ... num_1 D_2 ... num_2 D_3 ...))
-   (glb (N D_1 ... D_2 ... D_3 ...))]
-  ; Conflicting values
-  [(glb (D_1 ... stoVal_1 D_2 ... stoVal_2 D_3 ...))
-   (∅)]
-  [(glb (D ...))
-   (D ...)])
-
-(test-equal (term (glb ((1 : 1))))
-            (term ((1 : 1))))
-(test-equal (term (glb ((1 : 1) (1 : 1))))
-            (term (N)))
-(test-equal (term (glb ((1 : 1) (2 : 1))))
-            (term (N)))
-(test-equal (term (glb ((1 : 1) (2 : 1) (4 : 2))))
-            (term (N)))
-(test-equal (term (glb ((1 : 1) ((3 : (λ (x) (5 : x))) ()))))
-            (term (∅)))
-(test-equal (term (glb (((2 : (λ (x) (9 : x))) ()) ((3 : (λ (x) (5 : x))) ()))))
-            (term (∅)))
-
-(define-metafunction k-cfa
-  join : σ σ -> σ
-  [(join σ_1 σ_2)
-   ,(let ([h2 (make-hash (map (λ (x)
-                                (cons (car x)
-                                      (apply set (cadr x))))
-                              (term σ_2)))])
-      (for ([p (term σ_1)])
-        (define k (car p))
-        (define v (apply set (cadr p)))
-        (hash-update! h2
-                      k
-                      (λ (v2)
-                        (set-union v v2))
-                      v))
-      (map (λ (x)
-             (list (car x)
-                   (term (glb ,(set->list (cdr x))))))
-           (sort (hash->list h2)
-                 addr<?-string
-                 #:key car)))])
-
-; Compares string representations of addresses.
-(define(addr<?-string a1 a2)
+(define(string-format<? a1 a2)
   (string<? (format "~s" a1)
             (format "~s" a2)))
 
-(check-equal? (addr<?-string '(1 × ε) '(2 × ε)) #t)
-(check-equal? (addr<?-string '(1 × (2 ε)) '(2 × ε)) #t)
-(check-equal? (addr<?-string '(1 × (2 ε)) '(1 × ε)) #t)
-(check-equal? (addr<?-string '(1 × (3 ε)) '(1 × (2 ε))) #f)
+(check-equal? (string-format<? 'z 'x) #f)
+(check-equal? (string-format<? '(1 × ε) '(2 × ε)) #t)
+(check-equal? (string-format<? '(1 × (2 ε)) '(2 × ε)) #t)
+(check-equal? (string-format<? '(1 × (2 ε)) '(1 × ε)) #t)
+(check-equal? (string-format<? '(1 × (3 ε)) '(1 × (2 ε))) #f)
+
+
+(define-metafunction k-cfa
+  join_env : ρ ρ -> ρ
+  [(join_env ρ_1 ρ_2)
+   ,(let ([h2 (make-hash (term ρ_2))])
+      (for ([p (term ρ_1)])
+        (define v (car p))
+        (define a (cdr p))
+        (hash-set! h2 v a))
+      (sort (hash->list h2)
+            string-format<?
+            #:key car))])
+
+(test-equal (term (join_env ((y (y × (2 (1 ε)))) (z (z × ε)))
+                            ((x (x × (97 ε))) (y (y × (4 (1 ε)))))))
+            (term ((x (x × (97 ε))) (y (y × (2 (1 ε)))) (z (z × ε)))))
+
+(define-metafunction k-cfa
+  glb : PS PS -> PS
+  ; Equal
+  [(glb PS_1 PS_1)
+   PS_1]
+  ; Numbers
+  [(glb number_1 number_2)
+   N]
+  [(glb number N)
+   N]
+  [(glb N number)
+   N]
+  ; Closures
+  [(glb clo_1 clo_2)
+   (proc-with-arity ,@(remove-duplicates (list (term (clo-get-arity clo_1))
+                                               (term (clo-get-arity clo_2)))))]
+  [(glb clo (proc-with-arity natural ...))
+   (proc-with-arity ,@(remove-duplicates (apply list
+                                                (term (clo-get-arity clo))
+                                                (term (natural ...)))))]
+  ; Catch-all
+  [(glb PS_1 PS_2)
+   ∅])
+
+(test-equal (term (glb 1 1))
+            (term 1))
+
+(define-metafunction k-cfa
+  storableJoin : Storable Storable -> Storable
+  ; call glb
+  [(storableJoin PS_1 PS_2)
+   (glb PS_1 PS_2)]
+  ; Union konts
+  [(storableJoin (κ_1 ...) (κ_2 ...))
+   ,(remove-duplicates (append (term (κ_1 ...))
+                               (term (κ_2 ...))))])
+
+(define-metafunction k-cfa
+  join_sto : σ σ -> σ
+  [(join_sto σ_1 σ_2)
+   ,(let ([h2 (make-hash (map (λ (x)
+                                (cons (car x)
+                                      (cadr x)))
+                              (term σ_2)))])
+      (for ([p (term σ_1)])
+        (define k (car p))
+        (define s1 (cadr p))
+        (hash-update! h2
+                      k
+                      (λ (s2)
+                        (term (storableJoin ,s1 ,s2)))
+                      s1))
+      (map (λ (x)
+             (list (car x)
+                   (cdr x)))
+           (sort (hash->list h2)
+                 string-format<?
+                 #:key car)))])
 
 ;
 ; Judgment forms
 ;
 (define-judgment-form k-cfa
-  #:mode (deref I O)
+  #:mode (deref-κ I O)
   
   [-------------------------------
-   (deref (D_1 ... atom D_2 ...) (atom ()))]
-  [-------------------------------
-   (deref (D_1 ... D D_2 ...) D)])
+   (deref-κ (κ_1 ... κ κ_2 ...) κ)])
 
-#|
+
 ;
 ;; Church numerals.
 ;
@@ -422,73 +712,59 @@
                    (λ (z)
                      ((m (n f)) z))))))
 
-; Helper to check output value
-; value -> (Σ -> bool)
-(define (val-check value)
-  (λ (x)
-    (match (car x)
-      [`(,_ : ,v)
-       (eq? v value)]
-      [_ #f])))
 
 
-; Church tests
-(test-->>∃ k-cfa-red
-           (inject `((,(church-numeral 5)
-                      (λ (x)
-                        (add1 x)))
-                     0))
-           (val-check 5))
-(test-->>∃ k-cfa-red
-           (inject `((((,SUM 
-                        ,(church-numeral 5))
-                       ,(church-numeral 2))
-                      (λ (x)
-                        (add1 x)))
-                     0))
-           (val-check 7))
-(test-->>∃ k-cfa-red
-           (inject `((((,MUL
-                        ,(church-numeral 1))
-                       ,(church-numeral 4))
-                      (λ (x)
-                        (add1 x)))
-                     0))
-           (val-check 4))
-|#
+; Tests
+(define (test-red exp PS)
+  (match (apply-reduction-relation* k-cfa-red
+                                    (inject exp))
+    ['()
+     (print (format "Could not reduce: ~s" exp))]
+    [l
+     (test-not-false (format "~s" `(member ,PS ,(map car l)))
+                     (member PS (map (λ (x)
+                                       (match x
+                                         [(? string?)
+                                          x]
+                                         [(? pair?)
+                                          (car x)]))
+                                     l)))]))
 
-#|
-'(1 :
-      ((2 :
-          ((3 : (λ (x) (4 : x)))
-           (5 : (λ (y) (6 : y)))))
-       (7 : (λ (z) (8 : z)))))
+(define (test-red-error exp PS)
+  (match (apply-reduction-relation* k-cfa-red
+                                    (inject exp))
+    ['()
+     (print (format "Could not reduce: ~s" exp))]
+    [l
+     (test-not-false (format "~s" `(member ,PS ,l))
+                     (member PS l))]))
 
-(traces k-cfa-red
-        (inject '(((λ (x) x)
-                   (λ (y) y))
-                  (λ (z) z))))
+(test-red '(if 3
+               1
+               2)
+          1)
 
-(traces k-cfa-red
-        (inject `((,(church-numeral 2)
-                   (λ (x)
-                     (add1 x)))
-                  0)))
-|#
+(test-red-error '((λ (x) (begin (set! x (λ (y) y))
+                                (x 1 2)))
+                  (λ (z) z))
+                "arity error")
 
 
-(apply-reduction-relation* k-cfa-red
-                           (inject '((λ (x) (x x))
-                                     (λ (x) (x x)))))
+(test-red '((λ (x) (begin (set! x 1)
+                          x))
+            2)
+          'N)
 
+(test-red `((,(church-numeral 2)
+             (λ (x)
+               (add1 x)))
+            0)
+          2)
 
-(apply-reduction-relation* k-cfa-red
-                           (inject '((λ (f) (f (f (f 1))))
-                                     (λ (x) (add1 (add1 x))))))
-
-(apply-reduction-relation* k-cfa-red
-                           (inject '((λ (f) (((λ (q)
-                                                (λ (y) y))
-                                              (f 1))
-                                             (f 1)))
-                                     (λ (x) x))))
+(test-red `((((,MUL
+               ,(church-numeral 1))
+              ,(church-numeral 4))
+             (λ (x)
+               (add1 x)))
+            0)
+          '∅)
