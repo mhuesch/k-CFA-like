@@ -69,6 +69,9 @@
 
 (define (add-labels e lab inc)
   (match e
+    ; Transform let case while labeling.
+    [`(let ([,v ,e] ...) ,e-body)
+     (add-labels `((λ ,v ,e-body) ,@e) lab inc)]
     [`(if ,e0 ,e1 ,e2)
      (define-values (le0 c0) (add-labels e0 (inc lab) inc))
      (define-values (le1 c1) (add-labels e1 c0 inc))
@@ -768,3 +771,13 @@
                (add1 x)))
             0)
           '∅)
+
+(test-red '(let ([x 1]
+                 [y 6])
+             x)
+          1)
+
+(traces k-cfa-red
+        (inject '(let [(x 3)]
+                   (begin (set! x (λ (x) x))
+                          ((add1 x))))))
