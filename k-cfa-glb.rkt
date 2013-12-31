@@ -316,7 +316,7 @@
         (e_body
          (join_env ,(map list (term (v_s ...)) (term (a_formals ...)))
                    ρ_clo)
-         (join_sto ,(map list (term (a_formals ...)) (term (PS_args ... PS)))
+         (join_sto ,(map list (term (a_formals ...)) (term (PS_args ...)))
                    σ)
          c
          u)
@@ -324,12 +324,14 @@
                                  (name κ
                                        (callk ()
                                               ρ_k
-                                              (((label : (λ (v_s ...) e_body))
-                                                ρ_clo)
-                                               PS_args ...)
+                                              (PS_k ...)
                                               c))))
+        (where (((label : (λ (v_s ...) e_body))
+                 ρ_clo)
+                PS_args ...)
+               (PS_k ... PS))
         (side-condition (eq? (length (term (v_s ...)))
-                             (length (term (PS_args ... PS)))))
+                             (length (term (PS_args ...)))))
         (where (a_formals ...) (alloc Σ κ))
         (where u (tick Σ κ))
         callk-done-clo-arity-correct)
@@ -344,12 +346,14 @@
                                  (name κ
                                        (callk ()
                                               ρ_k
-                                              (((label : (λ (v_s ...) e_body))
-                                                ρ_clo)
-                                               PS_args ...)
+                                              (PS_k ...)
                                               c))))
+        (where (((label : (λ (v_s ...) e_body))
+                 ρ_clo)
+                PS_args ...)
+               (PS_k ... PS))
         (side-condition (not (eq? (length (term (v_s ...)))
-                                  (length (term (PS_args ... PS))))))
+                                  (length (term (PS_args ...))))))
         (where (a_formals ...) (alloc Σ κ))
         (where u (tick Σ κ))
         callk-done-clo-arity-incorrect)
@@ -505,13 +509,15 @@
           (name κ
                 (callk ()
                        ρ_k
-                       (((label : (λ (v_s ...) e_body))
-                         ρ_clo)
-                        PS_args ...)
+                       (PS_k ...)
                        c)))
    ,(map (λ (formal)
            `(,formal × ,(term contour)))
-         (term (v_s ...)))])
+         (term (v_s ...)))
+   (where (((label : (λ (v_s ...) e_body))
+            ρ_clo)
+           PS_args ...)
+          (PS_k ... PS))])
 
 
 
@@ -778,6 +784,11 @@
           1)
 
 (traces k-cfa-red
+        (inject '((λ (x) 1))))
+
+#|
+(traces k-cfa-red
         (inject '(let [(x 3)]
                    (begin (set! x (λ (x) x))
-                          ((add1 x))))))
+                          (add1 x)))))
+|#
