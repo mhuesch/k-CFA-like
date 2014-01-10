@@ -14,14 +14,13 @@
   [ρ ((v a) ...)]
   [σ ((a Storable) ...)]
   [e ::=
-     prim
      val
      ref
+     (label : prim)
      (label : (begin e e e ...))
      (label : (if e e e))
      (label : (set! v e))
-     (label : (e e ...))
-     (label : (prim e))]
+     (label : (e e ...))]
   [val ::=
        atom
        lam]
@@ -31,13 +30,15 @@
   [lam (label : ulam)]
   [ulam (λ (v ...) e)]
   [prim ::=
-        (label : add1)]
+        add1
+        +]
   [clo ::=
        (lam ρ)]
   [Storable ::=
             PS
             (κ κ ...)]
   [PS ::=
+      prim
       number
       false
       N
@@ -144,6 +145,18 @@
          σ
          a
          t))
+   ; labelled prim (e) -> unlabeled prim (PS)
+   (--> (name Σ
+              ((label : prim)
+               ρ
+               σ
+               a
+               t))
+        (prim
+         ρ
+         σ
+         a
+         t))
    ; lookup
    (--> (name Σ
               ((label : v)
@@ -162,25 +175,6 @@
                                  κ))
         (where u (tick Σ κ))
         lookup)
-   ; add1
-   (--> (name Σ
-              ((label_1 : ((label_2 : add1)
-                           e))
-               ρ
-               σ
-               a
-               t))
-        (e
-         ρ
-         σ_new
-         b
-         u)
-        (judgment-holds (deref-κ (lookup_sto a σ)
-                                 κ))
-        (where (b) (alloc Σ κ))
-        (where u (tick Σ κ))
-        (where σ_new (join_sto ((b ((add1k a)))) σ))
-        add1)
    ; set!
    (--> (name Σ
               ((label : (set! v e))
@@ -255,23 +249,6 @@
         begin)
    ; konts
    ;
-   ; add1
-   (--> (name Σ
-              (PS
-               ρ
-               σ
-               a
-               t))
-        ((add1-PS PS)
-         ρ
-         σ
-         b
-         u)
-        (judgment-holds (deref-κ (lookup_sto a σ)
-                                 (name κ
-                                       (add1k b))))
-        (where u (tick Σ κ))
-        add1-kont)
    ; set!
    (--> (name Σ
               (PS
@@ -307,6 +284,46 @@
         (where (b) (alloc Σ κ))
         (where u (tick Σ κ))
         callk-more)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (PS_result
+         ρ_k
+         σ
+         c
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk ()
+                                              ρ_k
+                                              (PS_k ...)
+                                              c))))
+        (where (prim PS_args ...)
+               (PS_k ... PS))
+        (where PS_result (prim-helper prim (PS_args ...)))
+        (where u (tick Σ κ))
+        callk-done-prim-success)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        string_error
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (callk ()
+                                              ρ_k
+                                              (PS_k ...)
+                                              c))))
+        (where (prim PS_args ...)
+               (PS_k ... PS))
+        (where string_error (prim-helper prim (PS_args ...)))
+        (where u (tick Σ κ))
+        callk-done-prim-error)
    (--> (name Σ
               (PS
                ρ
@@ -519,6 +536,69 @@
            PS_args ...)
           (PS_k ... PS))])
 
+; prim helpers
+(define (types-seen-set seen ts)
+  (if (null? ts)
+      seen
+      (match (car ts)
+        [(? number?)
+         (types-seen-set (set-add seen 'number) (cdr ts))]
+        ['N
+         (types-seen-set (set-add seen 'N) (cdr ts))]
+        ['∅
+         (types-seen-set (set-add seen '∅) (cdr ts))]
+        [else
+         (types-seen-set (set-add seen 'other) (cdr ts))])))
+
+(define (types-seen types)
+  (sort (set->list (types-seen-set (set) types))
+        string<=?
+        #:key symbol->string))
+
+(check-equal? (types-seen '(1 N))
+              '(N number))
+(check-equal? (types-seen '(1 N ∅))
+              '(N number ∅))
+(check-equal? (types-seen '(1 9 0))
+              '(number))
+(check-equal? (types-seen '(1 9 0))
+              '(number))
+(check-equal? (types-seen '(12 ((1 : (λ () (2 : 1))) ())))
+              '(number other))
+
+(define-metafunction k-cfa
+  prim-helper : prim (PS ...) -> PS or string
+  [(prim-helper add1 (number))
+   ,(add1 (term number))]
+  [(prim-helper add1 (N))
+   N]
+  [(prim-helper add1 (∅))
+   ∅]
+  [(prim-helper add1 (PS ...))
+   ,(format "invalid application: ~s" (cons 'add1 (term (PS ...))))]
+  [(prim-helper + (PS ...))
+   ,(case (types-seen (term (PS ...)))
+      ['()
+       0]
+      [((number))
+       (apply + (term (PS ...)))]
+      [((N number) (N))
+       'N]
+      [((∅) (number ∅) (N number ∅) (N ∅))
+       '∅]
+      [else
+       (format "invalid application: ~s" (term (PS ...)))])])
+
+(test-equal (term (prim-helper + ()))
+            0)
+(test-equal (term (prim-helper + (N 3)))
+            'N)
+(test-equal (term (prim-helper + (1 N ∅)))
+            '∅)
+(test-equal (term (prim-helper +(1 9 0)))
+            10)
+(test-equal (term (prim-helper + (12 ((1 : (λ () (2 : 1))) ()))))
+            "invalid application: (12 ((1 : (λ () (2 : 1))) ()))")
 
 
 (define-metafunction k-cfa
@@ -783,8 +863,25 @@
              x)
           1)
 
-(traces k-cfa-red
-        (inject '((λ (x) 1))))
+(test-red-error '(add1 (λ () 1))
+                "invalid application: (add1 ((3 : (λ () (4 : 1))) ()))")
+
+(test-red-error '((λ (x) 1))
+                "arity error")
+
+(test-red '(+ 1 2 3)
+          6)
+
+
+(test-red '((λ (x) (begin (set! x 1)
+                          (+ x 3)))
+            2)
+          'N)
+
+(test-red '((λ (x) (begin (set! x (λ () 1))
+                          (+ x 3)))
+            2)
+          '∅)
 
 #|
 (traces k-cfa-red
