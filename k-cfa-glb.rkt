@@ -49,7 +49,7 @@
      (mt)
      (add1k a)
      (callk (e ...) ρ (PS ...) a)
-     (setk a label c)
+     (setk a c)
      (ifk e e ρ a)
      (begink e e ... a)]
   [ref (label : v)]
@@ -191,9 +191,7 @@
                                  κ))
         (where (b) (alloc Σ κ))
         (where u (tick Σ κ))
-        (where σ_new (join_sto ((b ((setk (lookup_env v ρ)
-                                          label
-                                          a))))
+        (where σ_new (join_sto ((b ((setk (lookup_env v ρ) a))))
                                σ))
         set!)
    ; app
@@ -263,7 +261,7 @@
          u)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (setk b label c))))
+                                       (setk b c))))
         (where u (tick Σ κ))
         setk)
    ; call
@@ -482,7 +480,7 @@
   [(tick (PS ρ σ a contour) (add1k a_0))
    contour]
   ; setk
-  [(tick (PS ρ σ a contour) (setk b label c))
+  [(tick (PS ρ σ a contour) (setk b c))
    contour]
   ; ifk
   [(tick (PS ρ σ (label × contour_ifk) contour) (ifk e_1 e_2 ρ_if c))
