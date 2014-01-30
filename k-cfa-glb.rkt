@@ -195,7 +195,8 @@
          ρ
          σ
          a
-         t))
+         t)
+        val-to-PS)
    ; labelled O (e) -> unlabeled O (PS)
    (--> (name Σ
               ((label : O)
@@ -207,7 +208,8 @@
          ρ
          σ
          a
-         t))
+         t)
+        remove-O-label)
    ; mon
    (--> (name Σ
               ((label : (mon C e))
@@ -548,7 +550,8 @@
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
                                        (ifk eOrPS_1 eOrPS_2 ρ_if c))))
-        (where u (tick Σ κ)))
+        (where u (tick Σ κ))
+        ifk)
    ; begin
    (--> (name Σ
               (PS
@@ -994,57 +997,58 @@
      (test-not-false (format "~s" `(member ,PS ,l))
                      (member PS l))]))
 
-
-(test-red '(+ 1 2)
-          3)
-
-(test-red '(mon boolean? 1)
-          '(blame 1))
-
-(test-red '((mon (-> number? number?)
-                 3)
-            2)
-          '(blame 3))
-
-(test-red '((mon (-> (-> number? (-> boolean? number?))
-                     boolean?)
-                 (λ (f) (number? ((f 5) tt))))
-            (λ (n) (λ (b) (if b (+ n 200) ff))))
+(define (run-tests)
+  (test-red '(+ 1 2)
+            3)
+  
+  (test-red '(mon boolean? 1)
+            '(blame 1))
+  
+  (test-red '((mon (-> number? number?)
+                   3)
+              2)
+            '(blame 3))
+  
+  (test-red '((mon (-> (-> number? (-> boolean? number?))
+                       boolean?)
+                   (λ (f) (number? ((f 5) tt))))
+              (λ (n) (λ (b) (if b (+ n 200) ff))))
             'tt)
+  
+  (test-red '(if 3
+                 1
+                 2)
+            1)
+  
+  (test-red-error '((λ (x) (begin (set! x (λ (y) y))
+                                  (x 1 2)))
+                    (λ (z) z))
+                  "arity error")
+  
+  
+  (test-red '((λ (x) (begin (set! x 1)
+                            x))
+              2)
+            'N)
+  
+  (test-red '(let ([x 1]
+                   [y 6])
+               x)
+            1)
+  
+  (test-red-error '((λ (x) 1))
+                  "arity error")
+  
+  (test-red '((λ (x) (begin (set! x 1)
+                            (+ x 3)))
+              2)
+            'N)
+  
+  (test-red '((λ (x) (begin (set! x (λ () 1))
+                            (+ x 3)))
+              2)
+            '∅))
 
-(test-red '(if 3
-               1
-               2)
-          1)
-
-(test-red-error '((λ (x) (begin (set! x (λ (y) y))
-                                (x 1 2)))
-                  (λ (z) z))
-                "arity error")
-
-
-(test-red '((λ (x) (begin (set! x 1)
-                          x))
-            2)
-          'N)
-
-(test-red '(let ([x 1]
-                 [y 6])
-             x)
-          1)
-
-(test-red-error '((λ (x) 1))
-                "arity error")
-
-(test-red '((λ (x) (begin (set! x 1)
-                          (+ x 3)))
-            2)
-          'N)
-
-(test-red '((λ (x) (begin (set! x (λ () 1))
-                          (+ x 3)))
-            2)
-          '∅)
 
 #|
 (test-red `((,(church-numeral 2)
