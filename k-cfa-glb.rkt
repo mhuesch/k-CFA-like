@@ -14,44 +14,59 @@
   [ρ ((v a) ...)]
   [σ ((a Storable) ...)]
   [e ::=
+     (blame any)
      val
      ref
-     (label : prim)
+     (label : O)
      (label : (begin e e e ...))
      (label : (if e e e))
      (label : (set! v e))
-     (label : (e e ...))]
+     (label : (e e ...))
+     (label : (mon C e))]
   [val ::=
-       atom
+       labelAtom
        lam]
+  [labelAtom ::=
+        (label : atom)]
+  [bool ::=
+        tt
+        ff]
   [atom ::=
-        (label : false)
-        (label : number)]
+        bool
+        number]
   [lam (label : ulam)]
   [ulam (λ (v ...) e)]
-  [prim ::=
-        add1
-        +]
+  [O ::=
+     add1
+     +
+     o?]
   [clo ::=
        (lam ρ)]
   [Storable ::=
             PS
             (κ κ ...)]
   [PS ::=
-      prim
-      number
-      false
+      O
+      atom
+      B
       N
       ∅
       (proc-with-arity natural natural ...)
       clo]
+  [o? ::=
+      number?
+      boolean?]
+  [C ::=
+     o?
+     (-> C ... C)]
   [κ ::=
      (mt)
      (add1k a)
      (callk (e ...) ρ (PS ...) a)
      (setk a c)
-     (ifk e e ρ a)
-     (begink e e ... a)]
+     (ifk eOrPS eOrPS ρ a)
+     (begink e e ... a)
+     (chk C ρ a)]
   [ref (label : v)]
   [v variable-not-otherwise-mentioned]
   [label natural]
@@ -61,54 +76,96 @@
   [labelOrVar ::=
               label
               v]
-  [a b c ::= (labelOrVar × contour)]
+  [a b c d ::= (labelOrVar × contour)]
   [t u ::= contour])
 
 (define (labelFrom1 e)
-  (define-values (res count) (add-labels e 1 add1))
-  res)
+  (set! lab 1)
+  (set! inc add1)
+  (add-labels e))
 
-(define (add-labels e lab inc)
+(define-syntax-rule (incLab!)
+  (begin0 lab
+          (set! lab (inc lab))))
+
+(define lab null)
+(define inc null)
+(define (add-labels e)
   (match e
     ; Transform let case while labeling.
     [`(let ([,v ,e] ...) ,e-body)
-     (add-labels `((λ ,v ,e-body) ,@e) lab inc)]
+       (add-labels `((λ ,v ,e-body) ,@e))]
     [`(if ,e0 ,e1 ,e2)
-     (define-values (le0 c0) (add-labels e0 (inc lab) inc))
-     (define-values (le1 c1) (add-labels e1 c0 inc))
-     (define-values (le2 c2) (add-labels e2 c1 inc))
-     (values `(,lab : (if ,le0 ,le1 ,le2))
-             c2)]
-    [`(begin ,e0 ,e1)
-     (define-values (le0 c0) (add-labels e0 (inc lab) inc))
-     (define-values (le1 c1) (add-labels e1 c0 inc))
-     (values `(,lab : (begin ,le0 ,le1))
-             c1)]
+     (define lab-current (incLab!))
+     (define le0 (add-labels e0))
+     (define le1 (add-labels e1))
+     (define le2 (add-labels e2))
+     `(,lab-current : (if ,le0 ,le1 ,le2))]
+    [`(begin ,es ...)
+     (define lab-current (incLab!))
+     (define les
+       (reverse (foldl (λ (e acc)
+                         (cons (add-labels e) acc))
+                       '()
+                       es)))
+     `(,lab-current : (begin ,@les))]
     [`(set! ,x ,e)
-     (define-values (le c) (add-labels e (inc lab) inc))
-     (values `(,lab : (set! ,x ,le))
-             c)]
-    [`(λ (,xs ...) ,e0)
-     (define-values (le0 count) (add-labels e0 (inc lab) inc))
-     (values `(,lab : (λ ,xs
-                        ,le0))
-             count)]
+     (define lab-current (incLab!))
+     (define le (add-labels e))
+     `(,lab-current : (set! ,x ,le))]
+    [`(λ (,xs ...) ,e)
+     (define lab-current (incLab!))
+     (define le (add-labels e))
+     `(,lab-current : (λ ,xs ,le))]
+    [`(mon ,C ,e)
+     (define lab-current (incLab!))
+     (define le (add-labels e))
+     `(,lab-current : (mon ,C ,le))]
     [`(,es ...)
-     (match-define (cons les-rev count)
-       (foldl (λ (e acc)
-                (match-define (cons les count) acc)
-                (define-values (le c-new) (add-labels e count inc))
-                (cons (cons le les) c-new))
-              (cons '() (inc lab))
-              es))
-     (values `(,lab : ,(reverse les-rev))
-             count)]
+     (define lab-current (incLab!))
+     (define les
+       (reverse (foldl (λ (e acc)
+                         (cons (add-labels e) acc))
+                       '()
+                       es)))
+     `(,lab-current : ,les)]
     [(? number? n)
-     (values `(,lab : ,n)
-             (inc lab))]
+     (define lab-current (incLab!))
+     `(,lab-current : ,n)]
     [(? symbol? s)
-     (values `(,lab : ,s)
-             (inc lab))]))
+     (define lab-1 (incLab!))
+     (define C (O-contract s))
+     (if C
+         (let ([lab-2 (incLab!)])
+           `(,lab-1 : (mon ,C (,lab-2 : ,s))))
+         `(,lab-1 : ,s))]))
+
+(define (O-contract s)
+  (case s
+    [(+) '(-> number? number? number?)]
+    [(add1) '(-> number? number?)]
+;    [(boolean?) '(-> any boolean?)]
+;    [(number?) '(-> any boolean?)]
+    [else #f]))
+
+(check-equal? (labelFrom1 '(+ 1 2))
+              '(1 : ((2 : (mon (-> number? number? number?) (3 : +)))
+                     (4 : 1)
+                     (5 : 2))))
+(check-equal? (labelFrom1 '(mon (-> boolean? boolean?) (λ (x) x)))
+              '(1 : (mon (-> boolean? boolean?)
+                         (2 : (λ (x) (3 : x))))))
+;(check-equal? (labelFrom1 '(boolean? ff))
+;              '(1 : ((2 : (mon (-> any boolean?) (3 : boolean?)))
+;                     (4 : ff))))
+;(check-equal? (labelFrom1 '(number? 99))
+;              '(1 : ((2 : (mon (-> any boolean?) (3 : number?)))
+;                     (4 : 99))))
+(check-equal? (labelFrom1 '((λ (x y) x)
+                            1
+                            2))
+              '(1 : ((2 : (λ (x y) (3 : x))) (4 : 1) (5 : 2))))
+                        
 
 ;; Annotates a bar expression with labels and injects it into a starting Σ
 (define (inject e)
@@ -117,12 +174,6 @@
     (((0 × ε) ((mt))))
     (0 × ε)
     ε))
-
-
-(test-equal (labelFrom1 '((λ (x y) x)
-                          1
-                          2))
-            '(1 : ((2 : (λ (x y) (3 : x))) (4 : 1) (5 : 2))))
 
 
 ;
@@ -145,18 +196,36 @@
          σ
          a
          t))
-   ; labelled prim (e) -> unlabeled prim (PS)
+   ; labelled O (e) -> unlabeled O (PS)
    (--> (name Σ
-              ((label : prim)
+              ((label : O)
                ρ
                σ
                a
                t))
-        (prim
+        (O
          ρ
          σ
          a
          t))
+   ; mon
+   (--> (name Σ
+              ((label : (mon C e))
+               ρ
+               σ
+               a
+               t))
+        (e
+         ρ
+         (join_sto ((b ((chk C ρ a))))
+                   σ)
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 κ))
+        (where (b) (alloc Σ κ))
+        (where u(tick Σ κ))
+        mon)
    ; lookup
    (--> (name Σ
               ((label : v)
@@ -264,6 +333,66 @@
                                        (setk b c))))
         (where u (tick Σ κ))
         setk)
+   ; chk
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (PS
+         ρ
+         (join_sto ((d ((callk () ρ_k (o?) c)))
+                    (c ((ifk PS (blame PS) ρ b)))) σ)
+         d
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (chk o? ρ_k b))))
+        (where (c d) (alloc Σ κ))
+        (where u (tick Σ κ))
+        chk-flat)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (,(add-labels `(λ ,(term (v_formals ...))
+                         (mon ,(term C_res)
+                              (,(term v)
+                               ,@(map (λ (v C) `(mon ,C ,v))
+                                      (term (v_formals ...))
+                                      (term (C_args ...)))))))
+         (join_env ((v c)) ρ)
+         (join_sto ((c PS)) σ)
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (chk (-> C_args ... C_res) ρ_k b))))
+        (where tt (proc? PS))
+        (where v ,(fresh-var))
+        (where (v_formals ...) ,(for/list ([i (range (length (term (C_args ...))))]) (fresh-var)))
+        (where (c) (alloc Σ κ))
+        (where u (tick Σ κ))
+        chk-arrow-proc)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        ((blame PS)
+         ρ
+         σ
+         a
+         t)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (chk (-> C_args ... C_res) ρ_k b))))
+        (where ff (proc? PS))
+        chk-arrow-not-proc)
    ; call
    (--> (name Σ
               (PS
@@ -299,11 +428,11 @@
                                               ρ_k
                                               (PS_k ...)
                                               c))))
-        (where (prim PS_args ...)
+        (where (O PS_args ...)
                (PS_k ... PS))
-        (where PS_result (prim-helper prim (PS_args ...)))
+        (where PS_result (O-helper O (PS_args ...)))
         (where u (tick Σ κ))
-        callk-done-prim-success)
+        callk-done-O-success)
    (--> (name Σ
               (PS
                ρ
@@ -317,11 +446,11 @@
                                               ρ_k
                                               (PS_k ...)
                                               c))))
-        (where (prim PS_args ...)
+        (where (O PS_args ...)
                (PS_k ... PS))
-        (where string_error (prim-helper prim (PS_args ...)))
+        (where string_error (O-helper O (PS_args ...)))
         (where u (tick Σ κ))
-        callk-done-prim-error)
+        callk-done-O-error)
    (--> (name Σ
               (PS
                ρ
@@ -411,14 +540,14 @@
                σ
                a
                t))
-        ((if-chooser PS e_1 e_2)
+        ((if-chooser PS eOrPS_1 eOrPS_2)
          ρ_if
          σ
          c
          u)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (ifk e_1 e_2 ρ_if c))))
+                                       (ifk eOrPS_1 eOrPS_2 ρ_if c))))
         (where u (tick Σ κ)))
    ; begin
    (--> (name Σ
@@ -445,12 +574,14 @@
                t))
         (e_1
          ρ
-         (join_sto ((a ((begink (e_2 ...) c)))))
-         a
+         (join_sto ((b ((begink e_2 e_3 ... c))))
+                   σ)
+         b
          u)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (begink (e_1 e_2 ...) c))))
+                                       (begink e_1 e_2 e_3 ... c))))
+        (where (b) (alloc Σ κ))
         (where u (tick Σ κ))
         begin-more)))
 ;
@@ -473,9 +604,12 @@
   ; set!
   [(tick (name Σ ((label : (set! v e)) ρ σ a contour)) κ)
    (k-left (label contour))]
-  ; prim
-  [(tick ((label : (prim e)) ρ σ a contour) κ)
+  ; O
+  [(tick ((label : (O e)) ρ σ a contour) κ)
    (k-left (label contour))]
+  ; mon
+  [(tick ((label : (mon C e)) ρ σ a t) κ)
+   (k-left (label t))]
   ; add1k
   [(tick (PS ρ σ a contour) (add1k a_0))
    contour]
@@ -483,11 +617,14 @@
   [(tick (PS ρ σ a contour) (setk b c))
    contour]
   ; ifk
-  [(tick (PS ρ σ (label × contour_ifk) contour) (ifk e_1 e_2 ρ_if c))
+  [(tick (PS ρ σ (label × contour_ifk) contour) (ifk eOrPS_1 eOrPS_2 ρ_if c))
    contour_ifk]
   ; begink
   [(tick (PS ρ σ (label × contour_begink) contour) (begink e_1 e_2 ... c))
    contour_begink]
+  ; chk
+  [(tick (PS ρ σ (label × contour_chk) t) (chk C ρ_k b))
+   contour_chk]
   ; callk-more
   [(tick (PS ρ σ (label × contour_callk) contour) (callk (e_k ...) ρ_k (PS_k ...) a))
    contour_callk])
@@ -511,10 +648,25 @@
   [(alloc (name Σ ((label_1 : (set! v e)) ρ σ a contour))
           κ)
    (((e-label e) × (tick Σ κ)))]
-  ; prim
-  [(alloc (name Σ ((label : (prim e)) ρ σ a contour))
+  ; mon
+  [(alloc (name Σ ((label_1 : (mon C e)) ρ σ a t))
           κ)
-   (((e-label e) × contour))]
+   (((e-label e) × (tick Σ κ)))]
+  ; begink
+  [(alloc (name Σ (PS ρ σ a contour))
+          (name κ (begink e_1 e_2 ... b)))
+   (((e-label e_1) × (tick Σ κ)))]
+  ; chk-flat
+  [(alloc (name Σ (PS ρ σ a t))
+          (name κ (chk o? ρ_k b)))
+   ,(let ([lab1 (incLab!)]
+          [lab2 (incLab!)])
+      (term ((,lab1 × (tick Σ κ)) (,lab2 × (tick Σ κ)))))]
+  ; chk-arrow
+  [(alloc (name Σ (PS ρ σ a t))
+          (name κ (chk (-> C ...) ρ_k b)))
+   ,(let ([lab1 (incLab!)])
+      (term ((,lab1 × (tick Σ κ)))))]
   ; call-more
   [(alloc (name Σ (PS ρ σ a contour))
           (name κ (callk (e_1 e_rest ...) ρ_k (PS_args ...) c)))
@@ -534,7 +686,7 @@
            PS_args ...)
           (PS_k ... PS))])
 
-; prim helpers
+; O helpers
 (define (types-seen-set seen ts)
   (if (null? ts)
       seen
@@ -565,16 +717,16 @@
               '(number other))
 
 (define-metafunction k-cfa
-  prim-helper : prim (PS ...) -> PS or string
-  [(prim-helper add1 (number))
+  O-helper : O (PS ...) -> PS or string
+  [(O-helper add1 (number))
    ,(add1 (term number))]
-  [(prim-helper add1 (N))
+  [(O-helper add1 (N))
    N]
-  [(prim-helper add1 (∅))
+  [(O-helper add1 (∅))
    ∅]
-  [(prim-helper add1 (PS ...))
+  [(O-helper add1 (PS ...))
    ,(format "invalid application: ~s" (cons 'add1 (term (PS ...))))]
-  [(prim-helper + (PS ...))
+  [(O-helper + (PS ...))
    ,(case (types-seen (term (PS ...)))
       ['()
        0]
@@ -585,19 +737,30 @@
       [((∅) (number ∅) (N number ∅) (N ∅))
        '∅]
       [else
-       (format "invalid application: ~s" (term (PS ...)))])])
+       (format "invalid application: ~s" (term (PS ...)))])]
+  [(O-helper number? (number)) tt]
+  [(O-helper number? (N)) tt]
+  [(O-helper number? (∅)) tt]
+  [(O-helper number? (PS)) ff]
+  [(O-helper boolean? (bool)) tt]
+  [(O-helper boolean? (PS)) ff])
 
-(test-equal (term (prim-helper + ()))
+(test-equal (term (O-helper + ()))
             0)
-(test-equal (term (prim-helper + (N 3)))
+(test-equal (term (O-helper + (N 3)))
             'N)
-(test-equal (term (prim-helper + (1 N ∅)))
+(test-equal (term (O-helper + (1 N ∅)))
             '∅)
-(test-equal (term (prim-helper +(1 9 0)))
+(test-equal (term (O-helper +(1 9 0)))
             10)
-(test-equal (term (prim-helper + (12 ((1 : (λ () (2 : 1))) ()))))
+(test-equal (term (O-helper + (12 ((1 : (λ () (2 : 1))) ()))))
             "invalid application: (12 ((1 : (λ () (2 : 1))) ()))")
 
+(define-metafunction k-cfa
+  proc? : PS -> bool
+  [(proc? clo) tt]
+  [(proc? O) tt]
+  [(proc? PS) ff])
 
 (define-metafunction k-cfa
   k-left : contour -> contour
@@ -617,12 +780,16 @@
 
 ; Misc helpers
 ;
+(define fresh-count 0)
+(define (fresh-var)
+  (begin0
+    (string->symbol (format "var_~s" fresh-count))
+    (set! fresh-count (add1 fresh-count)))) 
 
 (define-metafunction k-cfa
   make-PS : val ρ -> PS
-  [(make-PS atom ρ)
-   ,(match (term atom)
-      [`(,_ : ,x) x])]
+  [(make-PS (label : atom) ρ)
+   atom]
   [(make-PS lam ρ)
    (lam ρ)])
 
@@ -634,11 +801,11 @@
    ((label : PS) ρ)])
 
 (define-metafunction k-cfa
-  if-chooser : PS e e -> e
-  [(if-chooser false e_1 e_2)
-   e_2]
-  [(if-chooser PS e_1 e_2)
-   e_1])
+  if-chooser : PS eOrPS eOrPS -> eOrPS
+  [(if-chooser ff eOrPS_1 eOrPS_2)
+   eOrPS_2]
+  [(if-chooser PS eOrPS_1 eOrPS_2)
+   eOrPS_1])
 
 (define-metafunction k-cfa
   add1-PS : PS -> PS
@@ -655,12 +822,6 @@
    ,(match (term e)
       [`(,label : ,_)
        label])])
-
-(define-metafunction k-cfa
-  prim-label : prim -> label
-  [(prim-label (label : add1))
-   label])
-
 ;;
 ; Env and sto helpers
 ;;
@@ -711,6 +872,13 @@
   ; Equal
   [(glb PS_1 PS_1)
    PS_1]
+  ; Bools
+  [(glb bool_1 bool_2)
+   B]
+  [(glb B bool)
+   B]
+  [(glb bool B)
+   B]
   ; Numbers
   [(glb number_1 number_2)
    N]
@@ -826,6 +994,24 @@
      (test-not-false (format "~s" `(member ,PS ,l))
                      (member PS l))]))
 
+
+(test-red '(+ 1 2)
+          3)
+
+(test-red '(mon boolean? 1)
+          '(blame 1))
+
+(test-red '((mon (-> number? number?)
+                 3)
+            2)
+          '(blame 3))
+
+(test-red '((mon (-> (-> number? (-> boolean? number?))
+                     boolean?)
+                 (λ (f) (number? ((f 5) tt))))
+            (λ (n) (λ (b) (if b (+ n 200) ff))))
+            'tt)
+
 (test-red '(if 3
                1
                2)
@@ -842,6 +1028,25 @@
             2)
           'N)
 
+(test-red '(let ([x 1]
+                 [y 6])
+             x)
+          1)
+
+(test-red-error '((λ (x) 1))
+                "arity error")
+
+(test-red '((λ (x) (begin (set! x 1)
+                          (+ x 3)))
+            2)
+          'N)
+
+(test-red '((λ (x) (begin (set! x (λ () 1))
+                          (+ x 3)))
+            2)
+          '∅)
+
+#|
 (test-red `((,(church-numeral 2)
              (λ (x)
                (add1 x)))
@@ -856,32 +1061,6 @@
             0)
           '∅)
 
-(test-red '(let ([x 1]
-                 [y 6])
-             x)
-          1)
-
-(test-red-error '(add1 (λ () 1))
-                "invalid application: (add1 ((3 : (λ () (4 : 1))) ()))")
-
-(test-red-error '((λ (x) 1))
-                "arity error")
-
-(test-red '(+ 1 2 3)
-          6)
-
-
-(test-red '((λ (x) (begin (set! x 1)
-                          (+ x 3)))
-            2)
-          'N)
-
-(test-red '((λ (x) (begin (set! x (λ () 1))
-                          (+ x 3)))
-            2)
-          '∅)
-
-#|
 (traces k-cfa-red
         (inject '(let [(x 3)]
                    (begin (set! x (λ (x) x))
