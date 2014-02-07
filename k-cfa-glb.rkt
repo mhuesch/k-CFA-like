@@ -27,7 +27,7 @@
        labelAtom
        lam]
   [labelAtom ::=
-        (label : atom)]
+             (label : atom)]
   [bool ::=
         tt
         ff]
@@ -57,8 +57,11 @@
       number?
       boolean?]
   [C ::=
-     o?
-     (-> C ... C)]
+     (label label : o?)
+     (label label label label
+            : label ..._1
+            : label ..._1
+            : (-> C ..._1 C))]
   [κ ::=
      (mt)
      (add1k a)
@@ -88,13 +91,16 @@
   (begin0 lab
           (set! lab (inc lab))))
 
+(define-syntax-rule (incLabList! n)
+  (for/list ([_ (in-list (range n))]) (incLab!)))
+
 (define lab null)
 (define inc null)
 (define (add-labels e)
   (match e
     ; Transform let case while labeling.
     [`(let ([,v ,e] ...) ,e-body)
-       (add-labels `((λ ,v ,e-body) ,@e))]
+     (add-labels `((λ ,v ,e-body) ,@e))]
     [`(if ,e0 ,e1 ,e2)
      (define lab-current (incLab!))
      (define le0 (add-labels e0))
@@ -119,8 +125,9 @@
      `(,lab-current : (λ ,xs ,le))]
     [`(mon ,C ,e)
      (define lab-current (incLab!))
+     (define lC (add-labels-C C))
      (define le (add-labels e))
-     `(,lab-current : (mon ,C ,le))]
+     `(,lab-current : (mon ,lC ,le))]
     [`(,es ...)
      (define lab-current (incLab!))
      (define les
@@ -136,44 +143,91 @@
      (define lab-1 (incLab!))
      (define C (O-contract s))
      (if C
-         (let ([lab-2 (incLab!)])
-           `(,lab-1 : (mon ,C (,lab-2 : ,s))))
+         (let ([lC (add-labels-C C)]
+               [lab-2 (incLab!)])
+           `(,lab-1 : (mon ,lC
+                           (,lab-2 : ,s))))
          `(,lab-1 : ,s))]))
+
+(define (add-labels-C e)
+  (match e
+    [`(-> ,cs ...)
+     (define lab-front (incLabList! 4))
+     (define lab-mons (incLabList! (sub1 (length cs))))
+     (define lab-formals (incLabList! (sub1 (length cs))))
+     (define lCs
+       (reverse (foldl (λ (c acc)
+                         (cons (add-labels-C c) acc))
+                       '()
+                       cs)))
+     `(,@lab-front : ,@lab-mons : ,@lab-formals : (-> ,@lCs))]
+    [(? symbol? s)
+     (define lab-1 (incLab!))
+     (define lab-2 (incLab!))
+     `(,lab-1 ,lab-2 : ,s)]))
+
+(define (prefix-sym v)
+  (string->symbol (format "_~s" v)))
+
+(define-metafunction k-cfa
+  prefix-vars : e -> e
+  [(prefix-vars (label : v))
+   (label : ,(prefix-sym (term v)))]
+  [(prefix-vars (label : (begin e_s ...)))
+   (label : (begin ,@(map (λ (e)
+                            (term (prefix-vars ,e)))
+                          (term (e_s ...)))))]
+  [(prefix-vars (label : (if e_s ...)))
+   (label : (if ,@(map (λ (e)
+                         (term (prefix-vars ,e)))
+                       (term (e_s ...)))))]
+  [(prefix-vars (label : (set! v e)))
+   (label : (set! ,(prefix-sym (term v)) (prefix-vars e)))]
+  [(prefix-vars (label : (e_s ...)))
+   (label : ,(map (λ (e)
+                    (term (prefix-vars ,e)))
+                  (term (e_s ...))))]
+  [(prefix-vars (label : (mon C e)))
+   (label : (mon C (prefix-vars e)))]
+  ; catch-all
+  [(prefix-vars e)
+   e])
 
 (define (O-contract s)
   (case s
     [(+) '(-> number? number? number?)]
     [(add1) '(-> number? number?)]
-;    [(boolean?) '(-> any boolean?)]
-;    [(number?) '(-> any boolean?)]
+    ;    [(boolean?) '(-> any boolean?)]
+    ;    [(number?) '(-> any boolean?)]
     [else #f]))
 
-(check-equal? (labelFrom1 '(+ 1 2))
-              '(1 : ((2 : (mon (-> number? number? number?) (3 : +)))
-                     (4 : 1)
-                     (5 : 2))))
+ (check-equal? (labelFrom1 '(+ 1 2))
+              '(1 : ((2 : (mon (3 4 5 6
+                                  : 7 8
+                                  : 9 10
+                                  : (-> (11 12 : number?) (13 14 : number?) (15 16 : number?)))
+                               (17 : +)))
+                     (18 : 1)
+                     (19 : 2))))
 (check-equal? (labelFrom1 '(mon (-> boolean? boolean?) (λ (x) x)))
-              '(1 : (mon (-> boolean? boolean?)
-                         (2 : (λ (x) (3 : x))))))
-;(check-equal? (labelFrom1 '(boolean? ff))
-;              '(1 : ((2 : (mon (-> any boolean?) (3 : boolean?)))
-;                     (4 : ff))))
-;(check-equal? (labelFrom1 '(number? 99))
-;              '(1 : ((2 : (mon (-> any boolean?) (3 : number?)))
-;                     (4 : 99))))
+              '(1 : (mon (2 3 4 5
+                            : 6
+                            : 7
+                            : (-> (8 9 : boolean?) (10 11 : boolean?)))
+                         (12 : (λ (x) (13 : x))))))
 (check-equal? (labelFrom1 '((λ (x y) x)
                             1
                             2))
               '(1 : ((2 : (λ (x y) (3 : x))) (4 : 1) (5 : 2))))
-                        
+
 
 ;; Annotates a bar expression with labels and injects it into a starting Σ
 (define (inject e)
-  `(,(labelFrom1 e)
-    ()
-    (((0 × ε) ((mt))))
-    (0 × ε)
-    ε))
+  (term ((prefix-vars ,(labelFrom1 e))
+         ()
+         (((0 × ε) ((mt))))
+         (0 × ε)
+         ε)))
 
 
 ;
@@ -350,7 +404,7 @@
          u)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (chk o? ρ_k b))))
+                                       (chk (label_1 label_2 : o?) ρ_k b))))
         (where (c d) (alloc Σ κ))
         (where u (tick Σ κ))
         chk-flat)
@@ -360,22 +414,30 @@
                σ
                a
                t))
-        (,(add-labels `(λ ,(term (v_formals ...))
-                         (mon ,(term C_res)
-                              (,(term v)
-                               ,@(map (λ (v C) `(mon ,C ,v))
-                                      (term (v_formals ...))
-                                      (term (C_args ...)))))))
+        ((label_1
+          : (λ (v_formals ...)
+              (label_2
+               : (mon C_res
+                      (label_3
+                       : ((label_4 : v)
+                          (label_mons : (mon C_args (label_formals : v_formals)))
+                          ...))))))
          (join_env ((v c)) ρ)
          (join_sto ((c PS)) σ)
          b
          u)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (chk (-> C_args ... C_res) ρ_k b))))
-        (where tt (proc? PS))
+                                       (chk (label_1
+                                             label_2
+                                             label_3
+                                             label_4
+                                             : label_mons ...
+                                             : label_formals ...
+                                             : (-> C_args ... C_res)) ρ_k b))))
+        (where tt (proc? PS ,(length (term (C_args ...)))))
         (where v ,(fresh-var))
-        (where (v_formals ...) ,(for/list ([i (range (length (term (C_args ...))))]) (fresh-var)))
+        (where (v_formals ...) ,(for/list ([_ (in-list (term (C_args ...)))]) (fresh-var)))
         (where (c) (alloc Σ κ))
         (where u (tick Σ κ))
         chk-arrow-proc)
@@ -392,8 +454,14 @@
          t)
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
-                                       (chk (-> C_args ... C_res) ρ_k b))))
-        (where ff (proc? PS))
+                                       (chk (label_1
+                                             label_2
+                                             label_3
+                                             label_4
+                                             : label_mons ...
+                                             : label_formals ...
+                                             : (-> C_args ... C_res)) ρ_k b))))
+        (where ff (proc? PS ,(length (term (C_args ...)))))
         chk-arrow-not-proc)
    ; call
    (--> (name Σ
@@ -661,15 +729,15 @@
    (((e-label e_1) × (tick Σ κ)))]
   ; chk-flat
   [(alloc (name Σ (PS ρ σ a t))
-          (name κ (chk o? ρ_k b)))
-   ,(let ([lab1 (incLab!)]
-          [lab2 (incLab!)])
-      (term ((,lab1 × (tick Σ κ)) (,lab2 × (tick Σ κ)))))]
+          (name κ (chk (label_1 label_2 : o?) ρ_k b)))
+   ((label_1 × (tick Σ κ)) (label_2 × (tick Σ κ)))]
   ; chk-arrow
   [(alloc (name Σ (PS ρ σ a t))
-          (name κ (chk (-> C ...) ρ_k b)))
-   ,(let ([lab1 (incLab!)])
-      (term ((,lab1 × (tick Σ κ)))))]
+          (name κ (chk (label_1 label_s ...
+                                : label_mons ...
+                                : label_formals ...
+                                : (-> C_args ... C_res)) ρ_k b)))
+   ((label_1 × (tick Σ κ)))]
   ; call-more
   [(alloc (name Σ (PS ρ σ a contour))
           (name κ (callk (e_1 e_rest ...) ρ_k (PS_args ...) c)))
@@ -760,10 +828,15 @@
             "invalid application: (12 ((1 : (λ () (2 : 1))) ()))")
 
 (define-metafunction k-cfa
-  proc? : PS -> bool
-  [(proc? clo) tt]
-  [(proc? O) tt]
-  [(proc? PS) ff])
+  proc? : PS natural -> bool
+  [(proc? ((label : (λ (v ...) e)) ρ) natural)
+   ,(if (= (term natural) (length (term (v ...))))
+        (term tt)
+        (term ff))]
+  [(proc? add1 1) tt]
+  [(proc? + 2) tt]
+  [(proc? o? 1) tt]
+  [(proc? PS natural) ff])
 
 (define-metafunction k-cfa
   k-left : contour -> contour
