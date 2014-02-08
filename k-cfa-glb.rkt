@@ -36,32 +36,41 @@
         number]
   [lam (label : ulam)]
   [ulam (λ (v ...) e)]
+  [clo ::=
+       (lam ρ)]
   [O ::=
      add1
      +
      o?]
-  [clo ::=
-       (lam ρ)]
-  [Storable ::=
-            PS
-            (κ κ ...)]
-  [PS ::=
-      O
-      atom
-      B
-      N
-      ∅
-      (proc-with-arity natural natural ...)
-      clo]
   [o? ::=
       number?
       boolean?]
   [C ::=
+     any/c
      (label label : o?)
      (label label label label
             : label ..._1
             : label ..._1
             : (-> C ..._1 C))]
+  [pred ::=
+        o?
+        any/c]
+  [lattice-loc ::=
+               top
+               below]
+  [Storable ::=
+            PS
+            (κ κ ...)]
+  [PS :=
+      sym
+      O
+      atom
+      (proc-with-arity natural natural ...)
+      clo]
+  [sym ::=
+       B
+       N
+       ∅]
   [κ ::=
      (mt)
      (add1k a)
@@ -161,6 +170,8 @@
                        '()
                        cs)))
      `(,@lab-front : ,@lab-mons : ,@lab-formals : (-> ,@lCs))]
+    ['any/c
+     'any/c]
     [(? symbol? s)
      (define lab-1 (incLab!))
      (define lab-2 (incLab!))
@@ -197,11 +208,11 @@
   (case s
     [(+) '(-> number? number? number?)]
     [(add1) '(-> number? number?)]
-    ;    [(boolean?) '(-> any boolean?)]
-    ;    [(number?) '(-> any boolean?)]
+    [(boolean?) '(-> any/c boolean?)]
+    [(number?) '(-> any/c boolean?)]
     [else #f]))
 
- (check-equal? (labelFrom1 '(+ 1 2))
+(check-equal? (labelFrom1 '(+ 1 2))
               '(1 : ((2 : (mon (3 4 5 6
                                   : 7 8
                                   : 9 10
@@ -215,6 +226,13 @@
                             : 7
                             : (-> (8 9 : boolean?) (10 11 : boolean?)))
                          (12 : (λ (x) (13 : x))))))
+(check-equal? (labelFrom1 '(mon any/c (add1 2)))
+              '(1 : (mon any/c 
+                         (2 : ((3 : (mon (4 5 6 7
+                                            : 8
+                                            : 9
+                                            : (-> (10 11 : number?) (12 13 : number?))) (14 : add1)))
+                               (15 : 2))))))
 (check-equal? (labelFrom1 '((λ (x y) x)
                             1
                             2))
@@ -397,6 +415,22 @@
                a
                t))
         (PS
+         ρ_k
+         σ
+         b
+         u)
+        (judgment-holds (deref-κ (lookup_sto a σ)
+                                 (name κ
+                                       (chk any/c ρ_k b))))
+        (where u (tick Σ κ))
+        chk-any/c)
+   (--> (name Σ
+              (PS
+               ρ
+               σ
+               a
+               t))
+        (PS
          ρ
          (join_sto ((d ((callk () ρ_k (o?) c)))
                     (c ((ifk PS (blame PS) ρ b)))) σ)
@@ -500,7 +534,7 @@
                                               c))))
         (where (O PS_args ...)
                (PS_k ... PS))
-        (where PS_result (O-helper O (PS_args ...)))
+        (where PS_result (O-guard O (PS_args ...)))
         (where u (tick Σ κ))
         callk-done-O-success)
    (--> (name Σ
@@ -518,7 +552,7 @@
                                               c))))
         (where (O PS_args ...)
                (PS_k ... PS))
-        (where string_error (O-helper O (PS_args ...)))
+        (where string_error (O-guard O (PS_args ...)))
         (where u (tick Σ κ))
         callk-done-O-error)
    (--> (name Σ
@@ -758,57 +792,43 @@
           (PS_k ... PS))])
 
 ; O helpers
-(define (types-seen-set seen ts)
-  (if (null? ts)
-      seen
-      (match (car ts)
-        [(? number?)
-         (types-seen-set (set-add seen 'number) (cdr ts))]
-        ['N
-         (types-seen-set (set-add seen 'N) (cdr ts))]
-        ['∅
-         (types-seen-set (set-add seen '∅) (cdr ts))]
-        [else
-         (types-seen-set (set-add seen 'other) (cdr ts))])))
-
-(define (types-seen types)
-  (sort (set->list (types-seen-set (set) types))
-        string<=?
-        #:key symbol->string))
-
-(check-equal? (types-seen '(1 N))
-              '(N number))
-(check-equal? (types-seen '(1 N ∅))
-              '(N number ∅))
-(check-equal? (types-seen '(1 9 0))
-              '(number))
-(check-equal? (types-seen '(1 9 0))
-              '(number))
-(check-equal? (types-seen '(12 ((1 : (λ () (2 : 1))) ())))
-              '(number other))
-
 (define-metafunction k-cfa
-  O-helper : O (PS ...) -> PS or string
+  O-guard : O (PS ...) -> PS or string
+  ; "top" of lattice - happy path
+  [(O-guard O (PS ...))
+   (O-helper O (PS ...))
+   (where (-> pred_args ... pred_res) ,(O-contract (term O)))
+   (side-condition (eq? (length (term (pred_args ...)))
+                        (length (term (PS ...)))))
+   (where (top ...) ,(map (λ (p v) (term (check-arg ,p ,v))) (term (pred_args ...)) (term (PS ...))))]
+  ; "below" value on lattice - o?
+  [(O-guard o? (PS ...))
+   (O-helper o? (PS ...))
+   (where (-> pred_args ... pred_res) ,(O-contract (term o?)))
+   (side-condition (eq? (length (term (pred_args ...)))
+                        (length (term (PS ...)))))
+   (where (lattice-loc ...) ,(map (λ (p v) (term (check-arg ,p ,v))) (term (pred_args ...)) (term (PS ...))))]
+  ; "below" value on lattice - O
+  [(O-guard O (PS ...))
+   (contract->type pred_res)
+   (where (-> pred_args ... pred_res) ,(O-contract (term O)))
+   (side-condition (eq? (length (term (pred_args ...)))
+                        (length (term (PS ...)))))
+   (where (lattice-loc ...) ,(map (λ (p v) (term (check-arg ,p ,v))) (term (pred_args ...)) (term (PS ...))))]
+  ; arity mismatch
+  [(O-guard O (PS ...))
+   ,(format "arity error in ~s" (term (O PS ...)))
+   (where (-> pred_args ... pred_res) ,(O-contract (term O)))
+   (side-condition (not (eq? (length (term (pred_args ...)))
+                             (length (term (PS ...))))))])
+
+; Happy path implementations
+(define-metafunction k-cfa
+  O-helper : O (PS ...) -> PS
   [(O-helper add1 (number))
    ,(add1 (term number))]
-  [(O-helper add1 (N))
-   N]
-  [(O-helper add1 (∅))
-   ∅]
-  [(O-helper add1 (PS ...))
-   ,(format "invalid application: ~s" (cons 'add1 (term (PS ...))))]
-  [(O-helper + (PS ...))
-   ,(case (types-seen (term (PS ...)))
-      ['()
-       0]
-      [((number))
-       (apply + (term (PS ...)))]
-      [((N number) (N))
-       'N]
-      [((∅) (number ∅) (N number ∅) (N ∅))
-       '∅]
-      [else
-       (format "invalid application: ~s" (term (PS ...)))])]
+  [(O-helper + (number ...))
+   ,(apply + (term (number ...)))]
   [(O-helper number? (number)) tt]
   [(O-helper number? (N)) tt]
   [(O-helper number? (∅)) tt]
@@ -816,16 +836,41 @@
   [(O-helper boolean? (bool)) tt]
   [(O-helper boolean? (PS)) ff])
 
-(test-equal (term (O-helper + ()))
-            0)
-(test-equal (term (O-helper + (N 3)))
-            'N)
-(test-equal (term (O-helper + (1 N ∅)))
-            '∅)
-(test-equal (term (O-helper +(1 9 0)))
-            10)
-(test-equal (term (O-helper + (12 ((1 : (λ () (2 : 1))) ()))))
-            "invalid application: (12 ((1 : (λ () (2 : 1))) ()))")
+(define-metafunction k-cfa
+  check-arg : pred PS -> lattice-loc
+  [(check-arg number? number) top]
+  [(check-arg number? N) below]
+  [(check-arg number? ∅) below]
+  [(check-arg boolean? bool) top]
+  [(check-arg boolean? B) below]
+  [(check-arg boolean? ∅) below]
+  [(check-arg any/c N) below]
+  [(check-arg any/c B) below]
+  [(check-arg any/c ∅) below]
+  [(check-arg any/c PS) top])
+
+(define-metafunction k-cfa
+  contract->type : pred -> sym
+  [(contract->type number?) N]
+  [(contract->type number?) B]
+  [(contract->type number?) ∅])
+
+(check-equal? (term (O-guard + (1 2)))
+              (term 3))
+(check-equal? (term (O-guard + (1 2 3)))
+              (term "arity error in (+ 1 2 3)"))
+(check-equal? (term (O-guard + (1 N)))
+              (term N))
+(check-equal? (term (O-guard number? (1 N)))
+              (term "arity error in (number? 1 N)"))
+(check-equal? (term (O-guard number? (N)))
+              (term tt))
+(check-equal? (term (O-guard boolean? (N)))
+              (term ff))
+
+
+
+  
 
 (define-metafunction k-cfa
   proc? : PS natural -> bool
@@ -1120,7 +1165,7 @@
   (test-red '((λ (x) (begin (set! x (λ () 1))
                             (+ x 3)))
               2)
-            '∅))
+            'N))
 
 
 #|
