@@ -644,7 +644,7 @@
                σ
                a
                t))
-        ((if-chooser PS eOrPS_1 eOrPS_2)
+        ((if-chooser PS_test eOrPS_1 eOrPS_2)
          ρ_if
          σ
          c
@@ -652,6 +652,7 @@
         (judgment-holds (deref-κ (lookup_sto a σ)
                                  (name κ
                                        (ifk eOrPS_1 eOrPS_2 ρ_if c))))
+        (judgment-holds (deref-PS (test-PS-split PS) PS_test))
         (where u (tick Σ κ))
         ifk)
    ; begin
@@ -929,6 +930,16 @@
    eOrPS_1])
 
 (define-metafunction k-cfa
+  test-PS-split : PS -> (PS ...)
+  [(test-PS-split B) (tt ff)]
+  [(test-PS-split PS) (PS)])
+
+(define-judgment-form k-cfa
+  #:mode (deref-PS I O)
+  [-------------------------------------
+   (deref-PS (PS_1 ... PS PS_2 ...) PS)])
+
+(define-metafunction k-cfa
   add1-PS : PS -> PS
   [(add1-PS number)
    ,(add1 (term number))]
@@ -1165,7 +1176,17 @@
   (test-red '((λ (x) (begin (set! x (λ () 1))
                             (+ x 3)))
               2)
-            'N))
+            'N)
+  
+  (test-red '((λ (x) (begin (set! x ff)
+                            (if x
+                                (+ x 1)
+                                x)))
+              tt)
+            (term (blame B)))
+  
+  ; end tests
+  )
 
 
 #|
