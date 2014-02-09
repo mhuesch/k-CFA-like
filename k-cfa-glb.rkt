@@ -932,6 +932,7 @@
 (define-metafunction k-cfa
   test-PS-split : PS -> (PS ...)
   [(test-PS-split B) (tt ff)]
+  [(test-PS-split ∅) (tt ff)]
   [(test-PS-split PS) (PS)])
 
 (define-judgment-form k-cfa
